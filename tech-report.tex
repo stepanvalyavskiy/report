@@ -13,30 +13,66 @@
 \setlength{\parindent}{0pt} % indent first line
 \setlength{\parskip}{6pt} % before par
 
-\title{TODO: put report title here}
+\title{Implementation of consensus algorithms on git side}
 
-\author{TODO: put your name here}
-\email{TODO: put your email address here}
+\author{Stepan Valiavskii}
+\email{stepan.valiavskii@huawei.com}
 
 \begin{document}
 
 \begin{abstract}
-TODO: quickly explain the problem, the solution, and the conclusion in one paragraph
+To achieve strong consistency in DeGitX we need to solve a problem of atomic commit over N git servers.
+It isn't always possible to undo changes in git, so we need to manage git transactions and provide abortion mechanism as well.
+Fortunately, we aren't the first who met the problem of atomic commit.
+There are several well known algorithms as: 2PC, 3PC and Paxos-Commit.
+Theoretically, each of them could solve our problem.
+We have investigated how they could be implemented with git.
+We stay on 2PC integrated in git reference transaction hook.
+The problem is particularly solved.
+Now we need to implement it and do benchmarking.
 \end{abstract}
 
 \maketitle
 
 \section{Problem}
 
-TODO: explain the problem in details
+DeGitX keep three copies of every repository on three different servers.
+We need to keep repositories fully
+available without interruption even if one of those servers goes down.
+Even in the extreme case that two copies of a repository become unavailable at
+the same time, the repository should remains readable, i.e., fetches, clones, and
+most of the web UI continue to work.
+We need to implement replication at the application layer, rather than at the disk layer.
+When the replicas are three loosely-coupled Git repositories kept
+in sync via Git protocols, rather than identical disk images full of repositories,
+it gives us great flexibility to decide where to
+store the replicas of a repository and which replica to use for read operations.
+
+To split read traffic over replicas and to remain repository readable even if two copies become unavailable,
+we need to ensure that every Git update is safely replicated to all of the replicas in most cases
+and to at least a quorum of replicas in every case.
+
+So what should be done to do an atomic commit in 3 git replicas:
+\begin{enumerate}
+  \item on each node: lock all data that going to be changed (this sync section should be extremely small).
+  \item on each node: verify if commit could be accepted.
+  \item do voting and notify all nodes about decision: accept or discard.
+  \item accept/discard changes on all nodes or at least on quorum.
+  \item release locks.
+  \item schedule replication for outdated node, if changes were accepted by quorum (2/3 nodes) and mark node as outdated (Such node stops accepts read requests till restoring).
+  \item replicate outdated node.
+\end{enumerate}
 
 \section{Related works}
 
-TODO: explain existing solutions and why they were not suitable
+GitHub Spokes - not open sourced.
+Gitaly HA - not yet ready.
 
 \section{Solution}
 
-TODO: explain how the problem was solved by yourself, gove evidences of your sucess or failure
+To do atomic commit in 3 git replicas:
+1.
+
 
 \section{Conclusion}
 
