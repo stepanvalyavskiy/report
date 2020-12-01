@@ -66,16 +66,86 @@ So what should be done to do an atomic commit in 3 git replicas:
 \section{Related works}
 
 GitHub Spokes - not open sourced.
-Gitaly HA - not yet ready.
+
+Spokes uses the three-phase commit protocol to update the replicas and additionally use the replicas as a distributed lock
+to ensure that the database is updated in the correct order.
+All in all, this costs four round-trips to the distant replicas;
+expensive, but not prohibitive.
+(Spokes has plans to reduce the number of round trips through the use of a more advanced consensus algorithm.)
+
+As much as possible, Spokes also makes use of the time spent waiting on the network to get other work done.
+For example, while one replica is acquiring its lock,
+another replica might be computing a checksum and the coordinator might be reading from the database.
+
+\emph{\href{https://gitlab.com/groups/gitlab-org/-/epics/1189}{Gitaly HA}} - not yet ready.
+
+Gitaly Cluster allows Git repositories to be replicated on multiple warm Gitaly nodes.
+This improves fault tolerance by removing single points of failure.
+Reference transactions, introduced in GitLab 13.3,
+causes changes to be broadcast to all the Gitaly nodes in the cluster,
+but only the Gitaly nodes that vote in agreement with the primary node persist the changes to disk.
+If all the replica nodes dissented, only one copy of the change would be persisted to disk,
+creating a single point of failure until asynchronous replication completed.
+
+Quorum-based voting improves fault tolerance by requiring a majority of nodes to agree before persisting changes to disk.
+When the feature flag is enabled, writes must succeed on multiple nodes.
+Dissenting nodes are automatically brought in sync by asynchronous replication from the nodes that formed the quorum.
+
+It's currently in alpha and not enabled by default.
+If enabled, transactions are only available for a subset of Gitaly RPCs.
+
+\emph{\href{https://dsf.berkeley.edu/cs286/papers/paxoscommit-tods2006.pdf}{Paxos-commit}}
 
 \section{Solution}
 
-To do atomic commit in 3 git replicas:
-1.
+How to Lock:
 
+We don't want to block all writes while someone is pushing a payload,
+but we want to start the transaction right before a user attempts to write new refs.
+With this approach only reference update will be synchronised and objects are uploaded asynchronously.
+
+So we need to lock on all git reference update operations.
+Git \emph{\href{https://git-scm.com/docs/githooks.html\#_reference_transaction}{reference-transaction hook}}
+handles all reference update operations and queues reference updates to the transaction and locks reference updates on disk.
+In the "prepared" state, a non-zero exit status will cause the transaction to be aborted.
+And zero status - to be committed.
+After that lock will be released.
+
+So everything seems to be ready from the box.
+We need only implement voting here and return zero status if all replicas/quorum have been agreed, and non-zero if quorum isn't reached.
+As soon as it gets called, it will take all
+of stdin and use it to cast a vote to a central service.
+The most important upside is that this will catch all commands writing
+references at once, allowing to implement strong consistency for
+reference updates via a single mechanism.
+Each of the hooks will block until it receives a message from coordinator telling to to either go on with the update or to abort.
+
+So the solution is: implement atomic commit protocol in git reference transaction hook.
+
+\section{Future work}
+
+\begin{enumerate}
+  \item compare atomic commit protocols: 2PC, 3PC, Paxos-commit
+  \item implement and do benchmarking
+  \item investigate self-healing mechanism
+\end{enumerate}
 
 \section{Conclusion}
 
-TODO: explain what is the effect of your work, who benefiter, what are the next steps
+Now DeGitX team has vision how to achieve strong consistency.
+
+To simplify we decided to use 2PC as 3PC is about better failure recovery.
+Also to perform commit at first we need an agreement from all nodes.
+
+pros:
+\begin{itemize}
+  \item simple
+  \item strong consistent
+\end{itemize}
+
+cons:
+\begin{itemize}
+  \item if a single replica fails, repository becomes read-only
+\end{itemize}
 
 \end{document}
