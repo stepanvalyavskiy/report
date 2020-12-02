@@ -107,7 +107,7 @@ With this approach only reference update will be synchronised and objects are up
 So we need to lock on all git reference update operations.
 Git \emph{\href{https://git-scm.com/docs/githooks.html\#_reference_transaction}{reference-transaction hook}}
 handles all reference update operations and queues reference updates to the transaction and locks reference updates on disk.
-In the "prepared" state, a non-zero exit status will cause the transaction to be aborted.
+In the ``prepared" state, a non-zero exit status will cause the transaction to be aborted.
 And zero status - to be committed.
 After that lock will be released.
 
