@@ -125,7 +125,7 @@ The question is only which one to implement?
 The most common atomic commit protocol is
 \emph{\href{https://en.wikipedia.org/wiki/Two-phase_commit_protocol}{2PC}}.
 It is the most optimised protocol in fault-free case.
-2PC has a coordinator that decides whether to commit (only if all have voted "Yes") or abort the transaction (otherwise),
+2PC has a coordinator that decides whether to commit (only if all have voted ``Yes") or abort the transaction (otherwise),
 and notifies the result to all the participants.
 The greatest disadvantage of the two-phase commit protocol is that it is a blocking protocol.
 If the coordinator fails permanently, some participants will never resolve their transactions:
