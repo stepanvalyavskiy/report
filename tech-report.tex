@@ -94,8 +94,6 @@ Dissenting nodes are automatically brought in sync by asynchronous replication f
 It's currently in alpha and not enabled by default.
 If enabled, transactions are only available for a subset of Gitaly RPCs.
 
-\emph{\href{https://dsf.berkeley.edu/cs286/papers/paxoscommit-tods2006.pdf}{Paxos-commit}}
-
 \section{Solution}
 
 How to Lock:
@@ -122,6 +120,66 @@ Each of the hooks will block until it receives a message from coordinator tellin
 
 So the solution is: implement atomic commit protocol in git reference transaction hook.
 
+The question is only which one to implement?
+
+The most common atomic commit protocol is
+\emph{\href{https://en.wikipedia.org/wiki/Two-phase_commit_protocol}{2PC}}.
+It is the most optimised protocol in fault-free case.
+2PC has a coordinator that decides whether to commit (only if all have voted "Yes") or abort the transaction (otherwise),
+and notifies the result to all the participants.
+The greatest disadvantage of the two-phase commit protocol is that it is a blocking protocol.
+If the coordinator fails permanently, some participants will never resolve their transactions:
+After a participant has sent an agreement message to the coordinator, it will block until a commit or rollback is received.
+
+There are 2 protocols that make an atomic commit fault-tolerant:
+\emph{\href{https://dsf.berkeley.edu/cs286/papers/paxoscommit-tods2006.pdf}{Paxos-Commit}}
+and
+\emph{\href{https://en.wikipedia.org/wiki/Three-phase_commit_protocol}{3PC}}.
+But they solve it in completely different ways:
+
+Paxos-Commit makes it fault-tolerant by simply using a consensus
+algorithm to choose the committed/aborted decision.
+Paxos-Commit uses
+\emph{\href{https://en.wikipedia.org/wiki/Atomic_broadcast}{Total Order Broadcast}}
+to notify each participants about it's decision directly.
+So each node can decide weather commit or abort without any coordinator.
+It's required a leader and leader election phase.
+
+3PC still uses coordinator to make any decision but it provides additional phase that makes coordinator stateless and replaceable.
+
+A two-phase commit protocol cannot dependably recover
+from a failure of both the coordinator and a cohort member during the Commit phase.
+If only the coordinator had failed, and no cohort members had received a commit message,
+it could safely be inferred that no commit had happened.
+If, however, both the coordinator and a cohort member failed,
+it is possible that the failed cohort member was the first to be notified,
+and had actually done the commit.
+Even if a new coordinator is selected,
+it cannot confidently proceed with the operation until it has received an agreement from all cohort members,
+and hence must block until all cohort members respond.
+
+The three-phase commit protocol eliminates this problem by introducing the Prepared to commit state.
+If the coordinator fails before sending preCommit messages,
+the cohort will unanimously agree that the operation was aborted.
+The coordinator will not send out a doCommit message until all cohort members have ACKed that they are Prepared to commit.
+This eliminates the possibility that any cohort member actually completed the transaction
+before all cohort members were aware of the decision to do so (an ambiguity that necessitated indefinite blocking in the two-phase commit protocol).
+
+So there are 2 approaches:
+\begin{enumerate}
+  \item Node Orchestrated: Node orchestrating puts the intelligence of replication into one of the nodes being modified.
+Orchestration requires designating a leader node for the transaction.
+This leader node becomes a critical path for all nodes involved.
+  \item Coordinator Orchestrated: Coordinator orchestrating isolates the critical path to a stateless coordinator.
+\end{enumerate}
+
+Both GitHub Spokes and Gitaly HA have chosen 3PC. And that's why:
+
+If we have operations that can succeed/fail independently of each other, then failure and recovery can be handled externally of the nodes.
+Stateless coordinators are preferred for the critical path since another one can pick up the task after failure.
+
+The question is answered: 3PC fits best to achieve strong consistency.
+
 \section{Future work}
 
 \begin{enumerate}
@@ -134,8 +192,10 @@ So the solution is: implement atomic commit protocol in git reference transactio
 
 Now DeGitX team has vision how to achieve strong consistency.
 
-To simplify we decided to use 2PC as 3PC is about better failure recovery.
-Also to perform commit at first we need an agreement from all nodes.
+To simplify we decided to use two-phase commit protocol at first and finally migrate to the three-phase commit protocol.
+Voting Strategies: at first the strongest voting strategy is chosen:
+all nodes have to agree before committing anything.
+Further it could be allowed to commit if quorum is reached.
 
 pros:
 \begin{itemize}
