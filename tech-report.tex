@@ -27,7 +27,7 @@ Fortunately, we aren't the first who met the problem of atomic commit.
 There are several well known algorithms as: 2PC, 3PC and Paxos-Commit.
 Theoretically, each of them could solve our problem.
 We have investigated how they could be implemented with git.
-We stay on 2PC integrated in git reference transaction hook.
+We stay on 3PC integrated in git reference transaction hook.
 The problem is particularly solved.
 Now we need to implement it and do benchmarking.
 \end{abstract}
@@ -183,8 +183,8 @@ The question is answered: 3PC fits best to achieve strong consistency.
 \section{Future work}
 
 \begin{enumerate}
-  \item compare atomic commit protocols: 2PC, 3PC, Paxos-commit
   \item implement and do benchmarking
+  \item design transaction service
   \item investigate self-healing mechanism
 \end{enumerate}
 
@@ -205,7 +205,21 @@ pros:
 
 cons:
 \begin{itemize}
-  \item if a single replica fails, repository becomes read-only
+  \item if a single replica fails, repository becomes read-only. (limitation of voting strategy)
+  \item if coordinator fails, entire repo is blocked until coordinator repairs. (limitation of 2PC protocol)
 \end{itemize}
+
+Voting data channel.
+
+In Gitaly Git hook talk directly to Praefect(Coordinator).
+Praefect passing along a gRPC metadata header along
+to Gitaly that includes both the listening address as well as the token required to authenticate.
+Gitaly knows how to extract the connection information and make it available to hooks by exposing it in an environment variable.
+
+We reuse this approach and establish data channel between coordinator and git hook via RPC\@.
+So nodes don't know that transactions even exist.
+
+\emph{\href{https://gitlab.com/gitlab-org/gitaly/-/blob/master/doc/design_ha.md\#transaction-service}{Transaction Service design}}
+could be borrowed from Gitaly.
 
 \end{document}
