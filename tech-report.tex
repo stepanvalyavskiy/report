@@ -1,4 +1,4 @@
-\documentclass[acmlarge, screen, nonacm]{acmart}
+\documentclass[sigplan, screen, nonacm, 11pt]{acmart}
 \usepackage[utf8]{inputenc}
 \usepackage{float}
 \usepackage{setspace}
@@ -48,7 +48,7 @@
 
 DeGitX keep N copies of every repository on different servers.
 It makes repository more fault-tolerant and increase availability:
-vven in the extreme case that not all copies of a repository become unavailable at
+even in the extreme case that not all copies of a repository become unavailable at
 the same time, the repository should remains readable, i.e., fetches, clones, and
 most of the web UI continue to work.
 
@@ -68,29 +68,29 @@ store repository history as a tree of references. Git uses content-addressable
 data storage~\cite{content-addressable-storage},
 it means that data update in such kind of storage can't modify old data, only append new data, so we can safely
 upload blob objects asynchronously to all replicas without conflicts.
-It is reasonable, since blob objects could be big compareing to
+It is reasonable, since blob objects could be big comparing to
 other git object types. The only problem we need to solve to achieve strong consistency during replication
-is a synchronization of git reference objects updates. Some refernces updates may not have conflicts if these references
+is a synchronization of git reference objects updates. Some reference's updates may not have conflicts if these references
 are located on different tree branches, for instance, if we are pushing commits to different branches. But
 single tree reference update must cause a conflict and should be synchronized.
 
 Git help a built-in instruments to handle such updates --- hooks. We can create a hook and git will call it on some event,
-using this hook we may constrol some internal git processes. For example, we may create
+using this hook we may control some internal git processes. For example, we may create
 \href{https://git-scm.com/docs/githooks.html\#\_reference\_transaction}{reference-transaction} hook
 which will be called by any Git command that performs reference updates. Also, this hook allows us to implement
 local transaction be providing 3 different states of transaction: prepared, committed and aborted.
 The state is passes as argument to hook executable.
 Each reference updating command invokes this hooks starting with prepare state when all reference updates
 have been queued to the transaction and references were locked on disk. Two other states could be passed
-when changes are commited or aborted.
+when changes are committed or aborted.
 
 So what should be done to do an atomic commit on each git replica:
 \begin{enumerate}
   \item receive git blobs for update
-  \item queue references for udpate
+  \item queue references for update
   \item lock all reference objects that are going to be changed
   \item verify if reference update could be accepted (prepare for commit)
-  \item if all participats are ready to commit (each relica in prepared state), then commit, otherwise abort commit
+  \item if all participants are ready to commit (each replica in prepared state), then commit, otherwise abort commit
 \end{enumerate}
 
 First step is not a problem due to blob objects nature (it's conflict-free replicated data type).
@@ -111,7 +111,7 @@ expensive, but not prohibitive.
 
 As much as possible, Spokes also makes use of the time spent waiting on the network to get other work done.
 For example, while one replica is acquiring its lock,
-another replica might be computing a checksum~\todo{(checksum of what? do we need to compute checksums too?)}
+another replica might be computing a checksum~\todo{(checksum of what? do we need to compute checksum too?)}
 and the coordinator might be reading~\todo{reading what? do we need it too?} from the database.
 
 
@@ -135,24 +135,24 @@ It's currently in alpha and not enabled by default.
 If enabled, transactions are only available for a subset of Gitaly RPCs.
 
 \todo{If some nodes are synced in background after update, then it's not a strong consistency, but eventual consistency;
-Atomic commit protocol ensures that all resource-managers are aggree on transaction before commiting it}.
+Atomic commit protocol ensures that all resource-managers are agree on transaction before committing it}.
 
 \subsection{Conclusion}
 
-A 2PC protocol cannot dependably recover from a failure of both the coordinator and acohort member during the Commit phase.
-If only the coordinator had failed, and no cohort membershad received a commit message, it could safely be inferred
+A 2PC protocol cannot dependably recover from a failure of both the coordinator and a cohort member during the Commit phase.
+If only the coordinator had failed, and no cohort members had received a commit message, it could safely be inferred
 that no commit had happened.
-If, however,both the coordinator and a cohort member failed, it is possible that the failed cohort member was thefirst
+If, however,both the coordinator and a cohort member failed, it is possible that the failed cohort member was the first
 to be notified, and had actually done the commit.
-Even if a new coordinator is selected, it cannotconfidently proceed with the operation until it has received
-an agreement from all cohort members, andhence must block until all cohort members respond.
+Even if a new coordinator is selected, it can not confidently proceed with the operation until it has received
+an agreement from all cohort members, and hence must block until all cohort members respond.
 \todo{add more details about messaging model --- 2PC works only in synchronous model}.
 
 The 3PC commit protocol eliminates this problem by introducing the Prepared to commit state.
-If the coordinator fails before sending preCommit messages, the cohort will unanimously agree that theoperation was aborted.
-The coordinator will not send out a doCommit message until all cohort membershave ACKed that they are Prepared to commit.
-This eliminates the possibility that any cohort memberactually completed the transaction before all cohort
-members were aware of the decision to do so (anambiguity that necessitated indefinite blocking
+If the coordinator fails before sending pre-commit messages, the cohort will unanimously agree that the operation was aborted.
+The coordinator will not send out a do-commit message until all cohort members have ACKed that they are Prepared to commit.
+This eliminates the possibility that any cohort member actually completed the transaction before all cohort
+members were aware of the decision to do so (an ambiguity that necessitated indefinite blocking
 in the two-phase commit protocol). Both GitHub Spokes and Gitaly Cluster have chosen 3PC for some reason.
 
 3PC selects new TM if the first fails.
@@ -178,7 +178,7 @@ To implement distributed atomic commit we can use Paxos-commit~\cite{paxos-commi
   \item It's fault tolerant --- it doesn't have single point of failure (SPOF), and it works correctly with
     non-byzantine node failures~\cite{byzantine-generals}.
   \item It's non-blocking and works in asynchronous system model.
-  \item It guarantees that all participant makes the same decidion about commit or abort.
+  \item It guarantees that all participant makes the same decision about commit or abort.
 \end{enumerate}
 
 The role of reference-transaction hook in Paxos commit is to decide either the node can prepare or can not.
@@ -193,9 +193,9 @@ TM initiates the reference update by choosing one random RM node and sending ref
 Let's call this random node a ``leader'' of transaction. The leader is trying to prepare for commit by
 locking a reference and writing references on disk. On success it calls reference-transaction hook with ``prepared''
 argument. Each back-end node in commit scope has an instance of Paxos to agree on transaction decision: prepared or aborted,
-let's call this string value as decidion;
+let's call this string value as decision;
 each back-end and front-end exposes ``acceptor'' API for other back-end nodes and uses ``proposer'' client to send
-the decidion to other nodes. When the leader is prepared, it performs two actions: 1) it sends 2A Paxos message with value
+the decision to other nodes. When the leader is prepared, it performs two actions: 1) it sends 2A Paxos message with value
 ``prepared'' and ballot number 0 to all Paxos acceptors; 2) it sends prepare message to all other RMs.
 Each RM who received prepare messages it trying to prepare for transaction in same way as it was performed by leader,
 except it doesn't send prepare messages to other RMs on success. Each RM is listening for decisions accepted from Paxos
@@ -205,9 +205,9 @@ if it receives any ``about'' message, then it sends abort to all RM, if all Paxo
 it sends commit request to all RMs. Each RM periodically checks the state of Paxos instances of current commit, and if it see
 that the quorum (N/2 + 1) of each Paxos instance has ``prepare'' value, then it sends commit message too.
 In case if RM node crashed, it send 1A Paxos message with larger ballot number for ``abort'' decision, it guarantee
-that if the same node already commited the transaction but didn't remember the Paxos instance will respond with
+that if the same node already committed the transaction but didn't remember the Paxos instance will respond with
 ``prepared'' decision. In case if TM fails, all of the nodes can complete the transaction because they checks the status
-of Paxos instance and can commit or abort based on this decidion.
+of Paxos instance and can commit or abort based on this decision.
 
 Paxos-commit guarantees the presence of only one leader that proposes updates.
 the decision is made only if the quorum is reached.
@@ -232,17 +232,18 @@ this guarantees progress by partitioning if at least one part of the network has
 Now DeGitX team has vision how to achieve strong consistency.
 
 To simplify we decided to use Paxos-commit with Git reference-transaction hooks.
-It solves atomic-commit probles and doesn't hurt performance dues to asynchronous blobs update
+It solves atomic-commit problems and doesn't hurt performance dues to asynchronous blobs update
 and simultaneous reference objects updates on different tree paths.
 It have hood fault-tolerance, works in partially-synchronous system model,
 handles non-byzantine node failures, and it satisfies all atomic-commit requirements
-stability (once an RM has entered thecommittedorabortedstate, itremains in that state forever),
-consistency (it is impossible for one RM to be in thecommittedstateand another to be in theabortedstate),
-non-triviality (if the entire network is nonfaulty throughout the exe-cution of the protocol,
+stability (once an RM has entered the committed or aborted state, it remains in that state forever),
+consistency (it is impossible for one RM to be in the committed state and another to be in
+the aborted state),
+non-triviality (if the entire network is non-faulty throughout the execution of the protocol,
 then (a) if all RMs reach the prepared state, then all RMs eventually reach the committed state,
-and (b) if someRM reaches the aborted state,  then all RMs eventually reach the aborted state),
-and non-blocking (ff, at any time, a sufficiently large network of nodes isnonfaulty for long enough,
-then every RM executed on those nodeswill eventually reach either the committed or aborted state).
+and (b) if some RM reaches the aborted state,  then all RMs eventually reach the aborted state),
+and non-blocking (ff, at any time, a sufficiently large network of nodes is non-faulty for long enough,
+then every RM executed on those nodes will eventually reach either the committed or aborted state).
 
 \newpage
 
