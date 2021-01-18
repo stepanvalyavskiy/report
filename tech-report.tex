@@ -1,4 +1,4 @@
-\documentclass[acmlarge, screen, nonacm]{acmart}
+\documentclass[sigplan, screen, nonacm, 11pt]{acmart}
 \usepackage[utf8]{inputenc}
 \usepackage{float}
 \usepackage{setspace}
@@ -13,77 +13,117 @@
 \setlength{\parindent}{0pt} % indent first line
 \setlength{\parskip}{6pt} % before par
 
-\title{Implementation of consensus algorithms on git side}
+% custom commands
+\newcommand{\code}[1]{\texttt{#1}}
+\newcommand{\todo}[1]{\textcolor{red}{TODO: #1}}
+
+\title{Atomic commit implementation for Git repository references}
 
 \author{Stepan Valiavskii}
 \email{stepan.valiavskii@huawei.com}
 
+\author{Kirill Chernyavskiy}
+\email{g4s8.public@gmail.com}
+
 \begin{document}
 
 \begin{abstract}
-To achieve strong consistency in DeGitX we need to solve a problem of atomic commit over N git servers.
-It isn't always possible to undo changes in git, so we need to manage git transactions and provide abortion mechanism as well.
-Fortunately, we aren't the first who met the problem of atomic commit.
-There are several well known algorithms as: 2PC, 3PC and Paxos-Commit.
-Theoretically, each of them could solve our problem.
-We have investigated how they could be implemented with git.
-We stay on 3PC integrated in git reference transaction hook.
-The problem is particularly solved.
-Now we need to implement it and do benchmarking.
+  To achieve strong consistency in DeGitX we need to solve a problem of atomic commit of Git references
+  over N git repository replicas.
+  It isn't always possible to undo changes in git, so we need to manage git transactions
+  and provide abortion mechanism as well.
+  Fortunately, some atomic commit algorithms exists, so we just need to adopt it to git references update.
+  % TODO: read, analyze and add to references.bib
+  %  - 3PC: https://ecommons.cornell.edu/handle/1813/6323 https://webee.technion.ac.il/~idish/Abstracts/jcss.html
+  %  - 2PC: check references section in https://en.wikipedia.org/wiki/Two-phase_commit_protocol
+  It is two-phase commit protocol (2PC), three-phase commit protocol (3PC) and paxos-commit~\cite{paxos-commit}.
+  Theoretically, each of them could solve our problem.
+  We have investigated how they could be implemented with git.
+  On the git side we can use git reference-transaction hook to handle prepare and commit states.
 \end{abstract}
 
 \maketitle
 
 \section{Problem}
 
-DeGitX keep three copies of every repository on three different servers.
-We need to keep repositories fully
-available without interruption even if one of those servers goes down.
-Even in the extreme case that two copies of a repository become unavailable at
+DeGitX keep N copies of every repository on different servers.
+It makes repository more fault-tolerant and increase availability:
+even in the extreme case that not all copies of a repository become unavailable at
 the same time, the repository should remains readable, i.e., fetches, clones, and
 most of the web UI continue to work.
-We need to implement replication at the application layer, rather than at the disk layer.
-When the replicas are three loosely-coupled Git repositories kept
+
+Each server node keeps many repositories, the repository set is distributed on different nodes,
+so we don't know ahead where repository replica will be located, this is why
+we implement replication at the application layer, rather than at the disk layer.
+When the replicas are N loosely-coupled Git repositories kept
 in sync via Git protocols, rather than identical disk images full of repositories,
 it gives us great flexibility to decide where to
 store the replicas of a repository and which replica to use for read operations.
 
-To split read traffic over replicas and to remain repository readable even if two copies become unavailable,
-we need to ensure that every Git update is safely replicated to all of the replicas in most cases
-and to at least a quorum of replicas in every case.
+To split read traffic over replicas and to remain repository readable even if some of copies become unavailable,
+we need to ensure that every repository replica serves same git content.
+Git defines 3 main types of objects: ``blob objects'' to keep git repository content, such as files, commits, etc;
+``reference objects'' to keep metadata of repository, such as current HEAD, branches, etc; ``tree object'' to
+store repository history as a tree of references. Git uses content-addressable
+data storage~\cite{content-addressable-storage},
+it means that data update in such kind of storage can't modify old data, only append new data, so we can safely
+upload blob objects asynchronously to all replicas without conflicts.
+It is reasonable, since blob objects could be big comparing to
+other git object types. The only problem we need to solve to achieve strong consistency during replication
+is a synchronization of git reference objects updates. Some reference's updates may not have conflicts if these references
+are located on different tree branches, for instance, if we are pushing commits to different branches. But
+single tree reference update must cause a conflict and should be synchronized.
 
-So what should be done to do an atomic commit in 3 git replicas:
+Git help a built-in instruments to handle such updates --- hooks. We can create a hook and git will call it on some event,
+using this hook we may control some internal git processes. For example, we may create
+\href{https://git-scm.com/docs/githooks.html\#\_reference\_transaction}{reference-transaction} hook
+which will be called by any Git command that performs reference updates. Also, this hook allows us to implement
+local transaction be providing 3 different states of transaction: prepared, committed and aborted.
+The state is passes as argument to hook executable.
+Each reference updating command invokes this hooks starting with prepare state when all reference updates
+have been queued to the transaction and references were locked on disk. Two other states could be passed
+when changes are committed or aborted.
+
+So what should be done to do an atomic commit on distributed replicas:
 \begin{enumerate}
-  \item on each node: lock all data that going to be changed (this sync section should be extremely small).
-  \item on each node: verify if commit could be accepted.
-  \item do voting and notify all nodes about decision: accept or discard.
-  \item accept/discard changes on all nodes or at least on quorum.
-  \item release locks.
-  \item schedule replication for outdated node, if changes were accepted by quorum (2/3 nodes) and mark node as outdated (Such node stops accepts read requests till restoring).
-  \item replicate outdated node.
+  \item Each replica receives git blobs for update
+  \item Each replica queues references for update
+  \item Each replica locks all reference objects that are going to be changed
+  \item Each replica verifies if reference update could be accepted using git (prepare for commit)
+  \item if all participants are ready to commit (each replica in prepared state), then commit, otherwise abort commit
 \end{enumerate}
+
+First step is not a problem due to blob objects nature (it's conflict-free replicated data type).
+Second step is performed by git protocol, and we don't need to care about it.
+Other steps are parts of atomic-commit protocol which we need to adopt for git transaction.
 
 \section{Related works}
 
-GitHub Spokes - not open sourced.
+\subsection{GitHub Spokes}
 
-Spokes uses the three-phase commit protocol to update the replicas and additionally use the replicas as a distributed lock
-to ensure that the database is updated in the correct order.
+\href{https://github.blog/2017-10-13-stretching-spokes/}{Spokes on github.blog}.
+
+Spokes uses the 3PC protocol to update the replicas and additionally use the replicas as a distributed lock
+to ensure that the database \todo{what database? we didn't mention any database previously} is updated in the correct order.
 All in all, this costs four round-trips to the distant replicas;
 expensive, but not prohibitive.
 (Spokes has plans to reduce the number of round trips through the use of a more advanced consensus algorithm.)
 
 As much as possible, Spokes also makes use of the time spent waiting on the network to get other work done.
 For example, while one replica is acquiring its lock,
-another replica might be computing a checksum and the coordinator might be reading from the database.
+another replica might be computing a checksum~\todo{(checksum of what? do we need to compute checksum too?)}
+and the coordinator might be reading~\todo{reading what? do we need it too?} from the database.
 
-\emph{\href{https://gitlab.com/groups/gitlab-org/-/epics/1189}{Gitaly HA}} - not yet ready.
+
+\subsection{Gitaly Cluster}
+
+\href{https://gitlab.com/groups/gitlab-org/-/epics/1189}{Gitaly HA} --- not yet ready.
 
 Gitaly Cluster allows Git repositories to be replicated on multiple warm Gitaly nodes.
 This improves fault tolerance by removing single points of failure.
 Reference transactions, introduced in GitLab 13.3,
-causes changes to be broadcast to all the Gitaly nodes in the cluster,
-but only the Gitaly nodes that vote in agreement with the primary node persist the changes to disk.
+causes changes to be broadcast to all the Gitaly nodes in the cluster~\todo{to all nodes or to all replicas of repository?},
+but only the Gitaly nodes that vote~\todo{we didn't explain voting previously} in agreement with the primary node persist the changes to disk \todo{this sentence is not very clear}.
 If all the replica nodes dissented, only one copy of the change would be persisted to disk,
 creating a single point of failure until asynchronous replication completed.
 
@@ -94,80 +134,26 @@ Dissenting nodes are automatically brought in sync by asynchronous replication f
 It's currently in alpha and not enabled by default.
 If enabled, transactions are only available for a subset of Gitaly RPCs.
 
-\section{Solution}
+\todo{If some nodes are synced in background after update, then it's not a strong consistency, but eventual consistency;
+Atomic commit protocol ensures that all resource-managers are agree on transaction before committing it}.
 
-How to Lock:
+\subsection{Conclusion}
 
-We don't want to block all writes while someone is pushing a payload,
-but we want to start the transaction right before a user attempts to write new refs.
-With this approach only reference update will be synchronised and objects are uploaded asynchronously.
+A 2PC protocol cannot dependably recover from a failure of both the coordinator and a cohort member during the Commit phase.
+If only the coordinator had failed, and no cohort members had received a commit message, it could safely be inferred
+that no commit had happened.
+If, however,both the coordinator and a cohort member failed, it is possible that the failed cohort member was the first
+to be notified, and had actually done the commit.
+Even if a new coordinator is selected, it can not confidently proceed with the operation until it has received
+an agreement from all cohort members, and hence must block until all cohort members respond.
+\todo{add more details about messaging model --- 2PC works only in synchronous model}.
 
-So we need to lock on all git reference update operations.
-Git \emph{\href{https://git-scm.com/docs/githooks.html\#_reference_transaction}{reference-transaction hook}}
-handles all reference update operations and queues reference updates to the transaction and locks reference updates on disk.
-In the ``prepared" state, a non-zero exit status will cause the transaction to be aborted.
-And zero status - to be committed.
-After that lock will be released.
-
-So everything seems to be ready from the box.
-We need only implement voting here and return zero status if all replicas/quorum have been agreed, and non-zero if quorum isn't reached.
-As soon as it gets called, it will take all
-of stdin and use it to cast a vote to a central service.
-The most important upside is that this will catch all commands writing
-references at once, allowing to implement strong consistency for
-reference updates via a single mechanism.
-Each of the hooks will block until it receives a message from coordinator telling to to either go on with the update or to abort.
-
-So the solution is: implement atomic commit protocol in git reference transaction hook.
-
-The question is only which one to implement?
-
-The most common atomic commit protocol is
-\emph{\href{https://en.wikipedia.org/wiki/Two-phase_commit_protocol}{2PC}}.
-It is the most optimised protocol in fault-free case.
-2PC has a coordinator that decides whether to commit (only if all have voted ``Yes") or abort the transaction (otherwise),
-and notifies the result to all the participants.
-The greatest disadvantage of the two-phase commit protocol is that it is a blocking protocol.
-If the coordinator fails permanently, some participants will never resolve their transactions:
-After a participant has sent an agreement message to the coordinator, it will block until a commit or rollback is received.
-
-There are 2 protocols that make an atomic commit fault-tolerant:
-\emph{\href{https://dsf.berkeley.edu/cs286/papers/paxoscommit-tods2006.pdf}{Paxos-Commit}}
-and
-\emph{\href{https://en.wikipedia.org/wiki/Three-phase_commit_protocol}{3PC}}.
-But they solve it in completely different ways:
-
-Paxos-Commit makes it fault-tolerant by simply using a consensus
-algorithm to choose the committed/aborted decision.
-Paxos-Commit uses
-\emph{\href{https://en.wikipedia.org/wiki/Atomic_broadcast}{Total Order Broadcast}}
-to notify each participants about it's decision directly.
-So each node can decide weather commit or abort without any coordinator.
-It's required a leader and leader election phase.
-
-3PC still uses coordinator to make any decision but it provides additional phase that makes coordinator replaceable.
-
-A two-phase commit protocol cannot dependably recover
-from a failure of both the coordinator and a cohort member during the Commit phase.
-If only the coordinator had failed, and no cohort members had received a commit message,
-it could safely be inferred that no commit had happened.
-If, however, both the coordinator and a cohort member failed,
-it is possible that the failed cohort member was the first to be notified,
-and had actually done the commit.
-Even if a new coordinator is selected,
-it cannot confidently proceed with the operation until it has received an agreement from all cohort members,
-and hence must block until all cohort members respond.
-
-The three-phase commit protocol eliminates this problem by introducing the Prepared to commit state.
-If the coordinator fails before sending preCommit messages,
-the cohort will unanimously agree that the operation was aborted.
-The coordinator will not send out a doCommit message until all cohort members have ACKed that they are Prepared to commit.
-This eliminates the possibility that any cohort member actually completed the transaction
-before all cohort members were aware of the decision to do so (an ambiguity that necessitated indefinite blocking in the two-phase commit protocol).
-
-Both GitHub Spokes and Gitaly HA have chosen 3PC for some reason.
-
-It's unclear why, while 3PC has drawback:
+The 3PC commit protocol eliminates this problem by introducing the Prepared to commit state.
+If the coordinator fails before sending pre-commit messages, the cohort will unanimously agree that the operation was aborted.
+The coordinator will not send out a do-commit message until all cohort members have ACKed that they are Prepared to commit.
+This eliminates the possibility that any cohort member actually completed the transaction before all cohort
+members were aware of the decision to do so (an ambiguity that necessitated indefinite blocking
+in the two-phase commit protocol). Both GitHub Spokes and Gitaly Cluster have chosen 3PC for some reason.
 
 3PC selects new TM if the first fails.
 However, if a cohort receives messages from two different processes,
@@ -179,6 +165,52 @@ that is as difficult as implementing a transaction commit protocol.
 3PC avoids blocking problem of 2PC if TM or cohort fails,
 but partitioning of network still may lead to blocking or inconsistency.
 
+
+\section{Solution}
+
+So we need to lock on all git reference update operations.
+Git \emph{\href{https://git-scm.com/docs/githooks.html\#\_reference\_transaction}{reference-transaction hook}}
+helps with locking on local node which handles reference update. We may use it to implement distributed atomic commit
+for repository replica nodes.
+
+To implement distributed atomic commit we can use Paxos-commit~\cite{paxos-commit} because:
+\begin{enumerate}
+  \item It's fault tolerant --- it doesn't have single point of failure (SPOF), and it works correctly with
+    non-byzantine node failures~\cite{byzantine-generals}.
+  \item It's non-blocking and works in asynchronous system model.
+  \item It guarantees that all participant makes the same decision about commit or abort.
+\end{enumerate}
+
+The role of reference-transaction hook in Paxos commit is to decide either the node can prepare or can not.
+
+\subsection{Algorithm overview}
+
+When a client pushes new changes to DeGitX system, the request is handle by the front-end (a node which processes
+git request), this node will take a role of transaction-manager (TM). Front-end node finds all back-end nodes (
+back-end node stores git repository replicas), where back-end nodes has resource-manager role (RM).
+TM node starts uploading blob objects to all RM nodes asynchronously. When all RMs accepts blob objects,
+TM initiates the reference update by choosing one random RM node and sending reference update request.
+Let's call this random node a ``leader'' of transaction. The leader is trying to prepare for commit by
+locking a reference and writing references on disk. On success it calls reference-transaction hook with ``prepared''
+argument. Each back-end node in commit scope has an instance\footnote{Paxos instance is a set of nodes
+which supports Paxos algorithm to make a decision on a single proposed value. In practice one physical node
+can run many instances of Paxos for Paxos-commit protocol} of Paxos to agree on transaction decision: prepared or aborted,
+let's call this string value as decision;
+each back-end and front-end exposes ``acceptor'' API for other back-end nodes and uses ``proposer'' client to send
+the decision to other nodes. When the leader is prepared, it performs two actions: 1) it sends 2A Paxos message with value
+``prepared'' and ballot number 0 to all Paxos acceptors; 2) it sends prepare message to all other RMs.
+Each RM who received prepare messages it trying to prepare for transaction in same way as it was performed by leader,
+except it doesn't send prepare messages to other RMs on success. Each RM is listening for decisions accepted from Paxos
+instances, if it see any ``abort'' decision, then it also aborts the transaction, if it see that all RMs decided to commit,
+then it commit the transaction too. The TM (it also Paxos acceptor in context of this transaction), is doing the same:
+if it receives any ``about'' message, then it sends abort to all RM, if all Paxos instances has ``prepare'' messages,
+it sends commit request to all RMs. Each RM periodically checks the state of Paxos instances of current commit, and if it see
+that the quorum (N/2 + 1) of each Paxos instance has ``prepare'' value, then it sends commit message too.
+In case if RM node crashed, it send 1A Paxos message with larger ballot number for ``abort'' decision, it guarantee
+that if the same node already committed the transaction but didn't remember the Paxos instance will respond with
+``prepared'' decision. In case if TM fails, all of the nodes can complete the transaction because they checks the status
+of Paxos instance and can commit or abort based on this decision.
+
 Paxos-commit guarantees the presence of only one leader that proposes updates.
 the decision is made only if the quorum is reached.
 The use of quorums provide partition tolerance by fencing minority partitions while the majority (N/2 + 1) continues to operate.
@@ -187,48 +219,37 @@ so it comes with an inherent availability trade-off.
 This problem is mitigated by the fact that each node hosts a replicated state machine which can be rebuilt or reconciled once the partition is healed.
 this guarantees progress by partitioning if at least one part of the network has N/2 + 1 nodes. In other case quorum is unreachable.
 
-
 \section{Future work}
 
 \begin{enumerate}
-  \item implement and do benchmarking
-  \item design and implement transactions
-  \item investigate self-healing mechanism
+  \item Implement prototype and do benchmarking
+  \item Create formal TLA+ specification for this algorithm
+  \item Design and implement transactions
+  \item Research for Paxos performance optimizations
+  \item Investigate self-healing mechanism~\todo{what is health-checking in context of atomic-commit?}
 \end{enumerate}
 
 \section{Conclusion}
 
 Now DeGitX team has vision how to achieve strong consistency.
 
-To simplify we decided to use two-phase commit protocol at first and finally migrate to three-phase commit or paxos-commit protocol.
-Voting Strategies: at first the strongest voting strategy is chosen:
-all nodes have to agree before committing anything.
-Further it could be allowed to commit if quorum is reached.
+To simplify we decided to use Paxos-commit with Git reference-transaction hooks.
+It solves atomic-commit problems and doesn't hurt performance dues to asynchronous blobs update
+and simultaneous reference objects updates on different tree paths.
+It have hood fault-tolerance, works in partially-synchronous system model,
+handles non-byzantine node failures, and it satisfies all atomic-commit requirements
+stability (once an RM has entered the committed or aborted state, it remains in that state forever),
+consistency (it is impossible for one RM to be in the committed state and another to be in
+the aborted state),
+non-triviality (if the entire network is non-faulty throughout the execution of the protocol,
+then (a) if all RMs reach the prepared state, then all RMs eventually reach the committed state,
+and (b) if some RM reaches the aborted state,  then all RMs eventually reach the aborted state),
+and non-blocking (ff, at any time, a sufficiently large network of nodes is non-faulty for long enough,
+then every RM executed on those nodes will eventually reach either the committed or aborted state).
 
-pros:
-\begin{itemize}
-  \item simple
-  \item strong consistent
-\end{itemize}
+\newpage
 
-cons:
-\begin{itemize}
-  \item if a single replica fails, repository becomes read-only. (limitation of voting strategy)
-  \item if coordinator fails, entire repo is blocked until coordinator repairs. (limitation of 2PC protocol)
-\end{itemize}
-
-Voting data channel.
-
-In Gitaly Git hook talk directly to Praefect(Coordinator).
-Praefect passing along a gRPC metadata header along
-to Gitaly that includes both the listening address as well as the token required to authenticate.
-Gitaly knows how to extract the connection information and make it available to hooks by exposing it in an environment variable.
-
-We reuse this approach and establish data channel between coordinator and git hook via RPC\@ in case we choose 3PC.
-So nodes don't know that transactions even exist.
-\emph{\href{https://gitlab.com/gitlab-org/gitaly/-/blob/master/doc/design_ha.md\#transaction-service}{Transaction Service design}}
-could be borrowed from Gitaly.
-
-If we choose Paxos-commit it will required us to design voting process as well.
+\bibliography{references}
+\bibliographystyle{ieeetr}
 
 \end{document}

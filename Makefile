@@ -1,5 +1,6 @@
 RM = rm -f
 BUILD = pdflatex
+BIB = bibtex
 BUIL_OPTS := -file-line-error -halt-on-error -interaction=nonstopmode -recorder
 
 .PHONY: all build clean show
@@ -7,6 +8,9 @@ BUIL_OPTS := -file-line-error -halt-on-error -interaction=nonstopmode -recorder
 all: build
 
 build: *.tex
+	$(BUILD) $(BUILD_OPTS) $?
+	$(BIB) tech-report
+	$(BUILD) $(BUILD_OPTS) $?
 	$(BUILD) $(BUILD_OPTS) $?
 
 clean:
