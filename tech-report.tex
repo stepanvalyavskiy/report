@@ -84,12 +84,12 @@ Each reference updating command invokes this hooks starting with prepare state w
 have been queued to the transaction and references were locked on disk. Two other states could be passed
 when changes are committed or aborted.
 
-So what should be done to do an atomic commit on each git replica:
+So what should be done to do an atomic commit on distributed replicas:
 \begin{enumerate}
-  \item receive git blobs for update
-  \item queue references for update
-  \item lock all reference objects that are going to be changed
-  \item verify if reference update could be accepted (prepare for commit)
+  \item Each replica receives git blobs for update
+  \item Each replica queues references for update
+  \item Each replica locks all reference objects that are going to be changed
+  \item Each replica verifies if reference update could be accepted using git (prepare for commit)
   \item if all participants are ready to commit (each replica in prepared state), then commit, otherwise abort commit
 \end{enumerate}
 
@@ -192,7 +192,9 @@ TM node starts uploading blob objects to all RM nodes asynchronously. When all R
 TM initiates the reference update by choosing one random RM node and sending reference update request.
 Let's call this random node a ``leader'' of transaction. The leader is trying to prepare for commit by
 locking a reference and writing references on disk. On success it calls reference-transaction hook with ``prepared''
-argument. Each back-end node in commit scope has an instance of Paxos to agree on transaction decision: prepared or aborted,
+argument. Each back-end node in commit scope has an instance\footnote{Paxos instance is a set of nodes
+which supports Paxos algorithm to make a decision on a single proposed value. In practice one physical node
+can run many instances of Paxos for Paxos-commit protocol} of Paxos to agree on transaction decision: prepared or aborted,
 let's call this string value as decision;
 each back-end and front-end exposes ``acceptor'' API for other back-end nodes and uses ``proposer'' client to send
 the decision to other nodes. When the leader is prepared, it performs two actions: 1) it sends 2A Paxos message with value
