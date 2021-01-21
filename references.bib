@@ -71,13 +71,3 @@ The main reason for writing this paper was to assign the new name to the problem
   abstract = {Herein, we propose a commit protocol and an associated recovery protocol that is resilient to site failures, lost messages, and network partitioning. The protocols do not require that a failure be correctly identified or even detected. The only potential effect of undetected failures is a degradation in performance. The protocols use a weighted voting scheme that supports an arbitrary degree of data replication (including none) and allows unilaterally aborts by any site. This last property facilitates the integration of these protocols with concurrency control protocols. Both protocols are centralized protocols with low message overhead.},
   url = {https://hdl.handle.net/1813/6323},
 }
-
-@Article{e3pc,
-author = {Idit Keidar and Danny Dolev},
-  title = {Increasing the Resilience of Distributed and Replicated Database Systems.},
-  year = {1998},
-  abstract = {This paper presents a new atomic commitment protocol, enhanced three phase commit (E3PC), that always allows a quorum in the system to make progress. Previously suggested quorum-based protocols (e.g., the quorum-based three phase commit (3PC) (Skeen, 1982)) allow a quorum to make progress in case of one failure. If failures cascade, however, and the quorum in the system is ``lost'' (i.e., at a given time no quorum component exists), a quorum can later become connected and still remain blocked. With our protocol, a connected quorum never blocks. E3PC is based on the quorum-based 3PC, and it does not require more time or communication than 3PC. We describe how this protocol can be exploited in a replicated database setting, making the database always available to a majority of the sites.},
-  journal = {Journal of Computer and System Sciences (JCSS)},
-  url = {https://webee.technion.ac.il/~idish/Abstracts/jcss.html},
-  keywords = {three-phase commit},
-}
