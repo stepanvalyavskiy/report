@@ -33,8 +33,6 @@
   It isn't always possible to undo changes in git, so we need to manage git transactions
   and provide abortion mechanism as well.
   Fortunately, some atomic commit algorithms exists, so we just need to adopt it to git references update.
-  % TODO: read, analyze and add to references.bib
-  %  - E3PC: https://webee.technion.ac.il/~idish/Abstracts/jcss.html
   It is two-phase commit protocol (2PC)~\cite{2pc}, three-phase commit protocol (3PC)~\cite{3pc} and paxos-commit~\cite{paxos-commit}.
   Theoretically, each of them could solve our problem.
   We have investigated how they could be implemented with git.
@@ -102,16 +100,14 @@ Other steps are parts of atomic-commit protocol which we need to adopt for git t
 
 \href{https://github.blog/2017-10-13-stretching-spokes/}{Spokes on github.blog}.
 
-Spokes uses the 3PC protocol to update the replicas and additionally use the replicas as a distributed lock
-to ensure that the database \todo{what database? we didn't mention any database previously. Good question. I think they speak about datastore for all non-git things.such a checksum or paxos-commit decision} is updated in the correct order.
+Spokes uses the 3PC protocol to update the replicas.
 All in all, this costs four round-trips to the distant replicas;
 expensive, but not prohibitive.
 (Spokes has plans to reduce the number of round trips through the use of a more advanced consensus algorithm.)
 
 As much as possible, Spokes also makes use of the time spent waiting on the network to get other work done.
 For example, while one replica is acquiring its lock,
-another replica might be computing a checksum\footnote{To check that replicas are in sync, after every update Spoke computes \href{https://github.blog/2017-10-13-stretching-spokes/\#using-checksums-to-compare-replicas}{checksum} for every replica over the list of all of its references and their values, plus a few other things}
-and the coordinator might be reading~\todo{reading what? Have no ideas. do we need it too?} from the database.
+another replica might be computing a checksum\footnote{https://github.blog/2017-10-13-stretching-spokes/\#using-checksums-to-compare-replicas} (To check that replicas are in sync, after every update Spoke computes checksum for every replica over the list of all of its references and their values, plus a few other things).
 
 
 
@@ -124,28 +120,34 @@ and the coordinator might be reading~\todo{reading what? Have no ideas. do we ne
 Gitaly Cluster allows Git repositories to be replicated on multiple warm Gitaly nodes.
 This improves fault tolerance by removing single points of failure.
 Reference transactions, introduced in GitLab 13.3,
-causes changes to be broadcast to all the Gitaly nodes in the cluster~\todo{to all nodes or to all replicas of repository? bold text https://gitlab.com/gitlab-org/gitaly/-/issues/3004\#problem-to-solve / https://about.gitlab.com/releases/2020/09/22/gitlab-13-4-released/\#gitaly-cluster-majority-wins-reference-transactions-beta but here https://docs.gitlab.com/ee/administration/gitaly/praefect.html\#cluster-or-shard only to replicas},
-but only the Gitaly nodes that vote~\todo{we didn't explain voting previously.
-Protocol will start as soon as a first "TX" message is received on the Praefect(coordinator) node.  Each of the pre-receive hooks will block until it receives a message from Praefect telling to to either go on with the update or to abort. In case the vote was successful, the hook will exit with 0 to indicate success, otherwise it will return an error code and thus abort the reference update.
-(https://gitlab.com/gitlab-org/gitaly/-/issues/2635)
-Voting strategy decides whether the vote was successful.
-Default voting strategy is quorum based - Instead of requiring all nodes to agree, only the primary and half of the secondaries need to agree. DOES NOT ensure strong consistency.
-Dissenting nodes are automatically brought in sync by asynchronous replication from the nodes that formed the quorum.
-This strategy is enabled by default since GitLab 13.4}
-in agreement with the primary node persist the changes to disk~\todo{this sentence is not very clear. It was borrowed from gitlab docs. It means that replica writes changes if only both primary and replica itself voted to commit. }.
+causes changes to be broadcast to all replicas.
 If all the replica nodes dissented, only one copy of the change would be persisted to disk,
 creating a single point of failure until asynchronous replication completed.
+To avoid it Gitaly introduced quorum-based voting.
 
 Quorum-based voting improves fault tolerance by requiring a majority of nodes to agree before persisting changes to disk.
 When the feature flag is enabled, writes must succeed on multiple nodes.
 Dissenting nodes are automatically brought in sync by asynchronous replication from the nodes that formed the quorum.
 
-It's currently in alpha and not enabled by default.
-If enabled, transactions are only available for a subset of Gitaly RPCs.
+Voting protocol will start as soon as a first``TX'' message is received on the Praefect(coordinator) node.
+Each of the pre-receive hooks will block until it receives a message from Praefect telling to to either go on with the update or to abort.
+In case the vote was successful, the hook will exit with 0 to indicate success, otherwise it will return an error code and thus abort the reference update\footnote{https://gitlab.com/gitlab-org/gitaly/-/issues/2635}.
+Voting strategy decides whether the vote was successful.
+Default voting strategy is quorum based and requires primary node to be a part of quorum.
+Instead of requiring all nodes to agree, only the primary and half of the secondaries need to agree.
+It doesn't ensure strong consistency.
+Dissenting nodes are automatically brought in sync by asynchronous replication from the nodes that formed the quorum.
+This strategy is enabled by default since GitLab 13.4
 
-~\todo{If some nodes are synced in background after update, then it's not a strong consistency, but eventual consistency;
-Atomic commit protocol ensures that all resource-managers are agree on transaction before committing it. -> Gitaly has only eventual consistency at the moment. They don't want to be blocked if only one replica is not available
-right now it`s really pessimistic because it will always require all nodes to agree on the same thing. https://gitlab.com/gitlab-org/gitaly/-/merge\_requests/2476}
+Strong consistency is currently in alpha and not enabled by default.
+If enabled, transactions are only available for a subset of RPCs.
+
+Actually, if some nodes are synced in background after update, then it's not a strong consistency, but eventual consistency.
+Atomic commit protocol ensures that all resource-managers are agree on transaction before committing it.
+Gitaly still don't want to be blocked if only one replica is not available\footnote{https://gitlab.com/gitlab-org/gitaly/-/merge\_requests/2476}.
+
+However, it's possible to change voting strategy to ``all nodes need to agree''.
+
 
 \subsection{Conclusion}
 
@@ -236,7 +238,6 @@ this guarantees progress by partitioning if at least one part of the network has
   \item Create formal TLA+ specification for this algorithm
   \item Design and implement transactions
   \item Research for Paxos performance optimizations
-  \item Investigate self-healing mechanism~\todo{what is health-checking in context of atomic-commit? -> No health-checking, only recovery protocol}
 \end{enumerate}
 
 \section{Conclusion}
