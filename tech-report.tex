@@ -109,10 +109,6 @@ As much as possible, Spokes also makes use of the time spent waiting on the netw
 For example, while one replica is acquiring its lock,
 another replica might be computing a checksum\footnote{https://github.blog/2017-10-13-stretching-spokes/\#using-checksums-to-compare-replicas} (To check that replicas are in sync, after every update Spoke computes checksum for every replica over the list of all of its references and their values, plus a few other things).
 
-
-
-
-
 \subsection{Gitaly Cluster}
 
 \href{https://gitlab.com/groups/gitlab-org/-/epics/1189}{Gitaly HA} --- not yet ready.
@@ -148,7 +144,6 @@ Gitaly still don't want to be blocked if only one replica is not available\footn
 
 However, it's possible to change voting strategy to ``all nodes need to agree''.
 
-
 \subsection{Conclusion}
 
 A 2PC protocol cannot dependably recover from a failure of both the coordinator and a cohort member during the Commit phase.
@@ -158,7 +153,6 @@ If, however,both the coordinator and a cohort member failed, it is possible that
 to be notified, and had actually done the commit.
 Even if a new coordinator is selected, it cannot confidently proceed with the operation until it has received
 an agreement from all cohort members. Hence, it must block until all cohort members respond.
-\todo{add more details about messaging model --- 2PC works only in synchronous model}.
 
 The 3PC commit protocol eliminates this problem by introducing the Prepared to commit state.
 If the coordinator fails before sending pre-commit messages, the cohort will unanimously agree that the operation was aborted.
@@ -177,6 +171,9 @@ that is as difficult as implementing a transaction commit protocol.
 3PC avoids blocking problem of 2PC if TM or cohort fails,
 but the partitioning of the network still may lead to blocking or inconsistency.
 
+Both algorithms, Two-phase and Three-phase commit assume a network with bounded delay and nodes with bounded response times;
+In most practical systems with unbounded network delay and process pauses, it cannot guarantee atomicity\footnote{https://ieeexplore.ieee.org/stamp/stamp.jsp?tp=\&arnumber=5353152\&tag=1}.
+Therefore they cannot work in systems with asynchronous messaging model.
 
 \section{Solution}
 
@@ -197,30 +194,40 @@ The role of reference-transaction hook in Paxos commit is to decide either the n
 
 \subsection{Algorithm overview}
 
-When a client pushes new changes to the DeGitX system, the request is handled by the front-end (a node that processes
-git request), this node will take a transaction-manager(TM) role. Front-end node finds all back-end nodes (
-back-end node stores git repository replicas), where back-end nodes have the resource-manager role (RM).
-TM node starts uploading blob objects to all RM nodes asynchronously. When all RMs accepts blob objects,
+When a client pushes new changes to the DeGitX system,
+the request is handled by the front-end (a node that processes git request),
+this node will take a transaction-manager(TM) role.
+Front-end node finds all back-end nodes (back-end node stores git repository replicas),
+where back-end nodes have the resource-manager role (RM).
+TM node starts uploading blob objects to all RM nodes asynchronously.
+When all RMs accepts blob objects,
 TM initiates the reference update by choosing one random RM node and sending reference update request.
-Let's call this random node a ``leader'' of transaction. The leader is trying to prepare for commit by
-locking a reference and writing references on disk. On success, it calls reference-transaction hook with ``prepared''
-argument. Each back-end node in commit scope has an instance\footnote{Paxos instance is a set of nodes
-which supporting the Paxos algorithm to make a decision on a single proposed value. In practice, one physical node
-can run many instances of Paxos for Paxos-commit protocol.} of Paxos to agree on transaction decision: prepared or aborted.
+Let's call this random node a ``leader'' of transaction.
+The leader is trying to prepare for commit by locking a reference and writing references on disk.
+On success, it calls reference-transaction hook with ``prepared'' argument.
+Each back-end node in commit scope has an instance\footnote{Paxos instance is a set of nodes
+which supporting the Paxos algorithm to make a decision on a single proposed value.
+In practice, one physical node can run many instances of Paxos for Paxos-commit protocol.}
+of Paxos to agree on transaction decision: prepared or aborted.
 Let's call this string value as decision;
-each back-end and front-end exposes ``acceptor'' API for other back-end nodes and uses ``proposer'' client to send
-the decision to other nodes. When the leader is prepared, it performs two actions: 1) it sends 2A Paxos message with value
-``prepared'' and ballot number 0 to all Paxos acceptors; 2) it sends prepare message to all other RMs.
+each back-end and front-end exposes ``acceptor'' API for other back-end nodes and uses ``proposer'' client
+to send the decision to other nodes.
+When the leader is prepared, it performs two actions:
+1) it sends 2A Paxos message with value ``prepared'' and ballot number 0 to all Paxos acceptors;
+2) it sends prepare message to all other RMs.
 Each RM who received prepare messages is trying to prepare for transaction in the same way as it was performed by the leader,
-except it doesn't send prepare messages to other RMs on success. Each RM is listening for decisions accepted from Paxos
-instances, if it sees any ``abort'' decision, it also aborts the transaction, if it sees that all RMs decided to commit,
-it also commits the transaction. The TM (it also Paxos acceptor in context of this transaction), is doing the same:
+except it doesn't send prepare messages to other RMs on success.
+Each RM is listening for decisions accepted from Paxos instances, if it sees any ``abort'' decision,
+it also aborts the transaction, if it sees that all RMs decided to commit, it also commits the transaction.
+The TM (it also Paxos acceptor in context of this transaction), is doing the same:
 if it receives any ``abort'' message, then it sends abort to all RM, if all Paxos instances have ``prepare'' messages,
-it sends commit request to all RMs. Each RM periodically checks the state of Paxos instances of the current commit, and if it identifies
+it sends commit request to all RMs.
+Each RM periodically checks the state of Paxos instances of the current commit, and if it identifies
 that the quorum (N/2 + 1) of each Paxos instance has the ``prepare'' value, then it sends the commit message too.
-In case if RM node crashed, it sends 1A Paxos message with larger ballot number for ``abort'' decision; it guarantees
-that if the same node already committed the transaction but didn't remember the Paxos instance will respond with
-``prepared'' decision. In case if TM fails, all of the nodes can complete the transaction because they checks the status
+In case if RM node crashed, it sends 1A Paxos message with larger ballot number for ``abort'' decision;
+it guarantees that if the same node already committed the transaction
+but didn't remember the Paxos instance will respond with ``prepared'' decision.
+In case if TM fails, all of the nodes can complete the transaction because they checks the status
 of Paxos instance and can commit or abort based on this decision.
 
 Paxos-commit guarantees the presence of only one leader that proposes updates.
@@ -229,7 +236,8 @@ The quorums’ use provides partition tolerance by fencing minority partitions w
 This is the pessimistic approach to solving split-brain,
 so it comes with an inherent availability trade-off.
 This problem is mitigated because each node hosts a replicated state machine that can be rebuilt or reconciled once the partition is healed.
-This guarantees progress by partitioning if at least one part of the network has N/2 + 1 nodes. In other cases the quorum is unreachable.
+This guarantees progress by partitioning if at least one part of the network has N/2 + 1 nodes.
+In other cases the quorum is unreachable.
 
 \section{Future work}
 
